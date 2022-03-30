@@ -161,14 +161,15 @@ if __name__ == "__main__":
     previousCoord = [0, 0, TAKEOFF_HEIGHT]   # For circle moves
     currentFormation = 0        # 0 = circle, 1 = line
     lineCoords = [[0, 0, 0]]*len(swarm.allcfs.crazyflies)
+    prevWall = 0
     reversed = False    # Indicate if the swarm has wrap & unwrapped, lining in reverse order
 
     # Main program loop
-    with open('testCSV.csv', newline='') as csvfile:
-    # with open('waypoints.csv', newline='') as csvfile:
+    # with open('testCSV.csv', newline='') as csvfile:
+    with open('waypoints.csv', newline='') as csvfile:
         # Load CSV coordinates into iterable object
-        # csv_Reader = csv.DictReader(csvfile, delimiter=',', quotechar='|')
-        csv_Reader = csv.DictReader(csvfile, delimiter=' ', quotechar='|')
+        csv_Reader = csv.DictReader(csvfile, delimiter=',', quotechar='|')
+        # csv_Reader = csv.DictReader(csvfile, delimiter=' ', quotechar='|')
 
         # Takeoff
         stableTakeoff(swarm, timeHelper)
@@ -179,6 +180,14 @@ if __name__ == "__main__":
             currentCoord = np.array(
                 [row['x'], row['y'], row['z']]).astype(np.float32)
             formation = int(row['Formation'])
+
+            if int(row['Wall']) > prevWall: # Approaching wall
+                swarm.allcfs.setParam("tof/tolerance", 0.3) # set height for ignoring z-ranger  
+                swarm.allcfs.setParam("tof/highpass", 1) # start ignoring z-ranger when height measured drops below tolerance
+                prevWall = 1
+            elif int(row['Wall']) < prevWall: # Leaving wall
+                swarm.allcfs.setParam('tof/highpass', 0) # stop ignoring for landing
+                prevWall = 0
 
             # 3A - Circle (FUNCTIONALLY COMPLETE)
             if formation == 0:
