@@ -52,7 +52,7 @@ from geometry_msgs.msg import *
 
 
 # GLOBAL CONSTANTS
-FORMATION_RADIUS = 1.25 # m
+FORMATION_RADIUS = 1.25  # m
 TAKEOFF_HEIGHT = 1.0    # m
 
 
@@ -60,7 +60,8 @@ def initSwarm():
     # Load the crazyflies from file and build the swarm object
     print("CF swarm starting...")
     rospack = rospkg.RosPack()
-    launchPath = rospack.get_path('crazyswarm_lnkd')+"/launch/allCrazyflies.yaml"
+    launchPath = rospack.get_path(
+        'crazyswarm_lnkd')+"/launch/allCrazyflies.yaml"
     # launchPath = "../launch/allCrazyflies.yaml"
     swarm = Crazyswarm(crazyflies_yaml=launchPath)
     timeHelper = swarm.timeHelper
@@ -80,8 +81,8 @@ def stableTakeoff(swarm: Crazyswarm, timeHelper):
     timeHelper.sleep(4.0)
 
 
-def circleLand(swarm: Crazyswarm, timeHelper, landCoord):
-    circleArrangement(swarm, timeHelper, landCoord, avoidance=False)
+def circleLand(swarm: Crazyswarm, timeHelper, landCoord, reverse=False):
+    circleArrangement(swarm, timeHelper, landCoord, avoidance=False, reverse=reverse)
     swarm.allcfs.land(0.04, 2.0)
     timeHelper.sleep(2.0)
 
@@ -93,9 +94,15 @@ def resetEstimator(swarm: Crazyswarm, timeHelper):
     timeHelper.sleep(1.0)
 
 
-def circleArrangement(swarm: Crazyswarm, timeHelper, frontCoord, avoidance=True):
+def circleArrangement(swarm: Crazyswarm, timeHelper, frontCoord, avoidance=True, reverse=False):
     # Takes front co-ordinates and arranges drones into circle formation
     # Assumes initial positions consider (0,0) to be front drone
+
+    formationPoses = getCircleCoords(swarm, frontCoord, reverse=reverse)
+    # if reverse:
+    #     formationPos = np.add(np.flip(cf.initialPosition), np.array(frontCoord))
+    # else:
+    #     formationPos = np.add(cf.initialPosition, np.array(frontCoord))
 
     if avoidance:
         # 1. Split drones into 5 different movement planes
@@ -107,7 +114,7 @@ def circleArrangement(swarm: Crazyswarm, timeHelper, frontCoord, avoidance=True)
         # 2. Create drone co-ord from its formation position and the formation's front and move
         for num, cf in enumerate(swarm.allcfs.crazyflies):
             height = calcFlightLevelValue(num, 5)
-            formationPos = np.add(cf.initialPosition, np.array(frontCoord))
+            formationPos = formationPoses[num]
             formationPos[2] += height
             cf.goTo(formationPos, 0, 2.5, relative=False)
         timeHelper.sleep(2.5)
@@ -119,8 +126,8 @@ def circleArrangement(swarm: Crazyswarm, timeHelper, frontCoord, avoidance=True)
         timeHelper.sleep(2.5)
 
     else:
-        for cf in swarm.allcfs.crazyflies:
-            formationPos = np.add(cf.initialPosition, np.array(frontCoord))
+        for num, cf in enumerate(swarm.allcfs.crazyflies):
+            formationPos = formationPoses[num]
             cf.goTo(formationPos, 0, 2.5, relative=False)
         timeHelper.sleep(2.5)
 
@@ -132,11 +139,14 @@ def calcFlightLevelValue(droneNum, numLevels):
     return height
 
 
-def getCircleCoords(swarm: Crazyswarm, circlePosition):
+def getCircleCoords(swarm: Crazyswarm, circlePosition, reverse=False):
     lineCoords = [[0, 0, 0]]*len(swarm.allcfs.crazyflies)
 
     for num, cf in enumerate(swarm.allcfs.crazyflies):
         lineCoords[num] = np.add(cf.initialPosition, np.array(circlePosition))
+
+    if reverse:
+        lineCoords.reverse()
 
     return lineCoords
 
@@ -151,6 +161,7 @@ if __name__ == "__main__":
     previousCoord = [0, 0, TAKEOFF_HEIGHT]   # For circle moves
     currentFormation = 0        # 0 = circle, 1 = line
     lineCoords = [[0, 0, 0]]*len(swarm.allcfs.crazyflies)
+    reversed = False    # Indicate if the swarm has wrap & unwrapped, lining in reverse order
 
     # Main program loop
     with open('testCSV.csv', newline='') as csvfile:
@@ -165,32 +176,45 @@ if __name__ == "__main__":
 
         # 3. Iterate over coordate array and move the swarm
         for row in csv_Reader:
-            currentCoord = np.array([row['x'], row['y'], row['z']]).astype(np.float32)
+            currentCoord = np.array(
+                [row['x'], row['y'], row['z']]).astype(np.float32)
             formation = int(row['Formation'])
 
             # 3A - Circle (FUNCTIONALLY COMPLETE)
             if formation == 0:
                 if formation != currentFormation:
                     # Handle formation update from 1 to 0
+                    # Hard coded to wrap in the same pattern as starting pattern
+                    # this assumes the fleet is returning in opposite direction
                     print("1 to 0")
-                    circleArrangement(swarm, timeHelper, currentCoord) 
+                    # circleArrangement(swarm, timeHelper, currentCoord)
+                    circleCoords = getCircleCoords(swarm, currentCoord, reversed)
+                    for coord in circleCoords:
+                        lineCoords.pop(len(lineCoords)-1)  # Remove final element
+                        lineCoords.insert(0, coord)  # Add new coord to front
+                        for num, cf in enumerate(swarm.allcfs.crazyflies):
+                            cf.goTo(lineCoords[num].tolist(), 0, 2.5, relative=False)
+                        timeHelper.sleep(2.5)
+                    reversed = not reversed
+
                 elif int(row['ID']) != 1:
-                    relativeMove = np.subtract(currentCoord, previousCoord).tolist()
+                    relativeMove = np.subtract(
+                        currentCoord, previousCoord).tolist()
                     # swarm.allcfs.goTo(relativeMove, 0, 2.5, relative=True)
                     swarm.allcfs.goTo(relativeMove, 0, 2.5)
                     timeHelper.sleep(2.5)
                 else:
-                    circleArrangement(swarm, timeHelper, currentCoord, False)
+                    circleArrangement(swarm, timeHelper, currentCoord, False, reverse=reversed)
 
             # 3B - Line
             else:
                 if formation != currentFormation:
                     # Handle formation update from 0 to 1
-                    lineCoords = getCircleCoords(swarm, previousCoord)
-                print("3C")
+                    lineCoords = getCircleCoords(swarm, previousCoord, reversed)
+                # print("3B")
                 lineCoords.pop(len(lineCoords)-1)  # Remove final element
                 lineCoords.insert(0, currentCoord)  # Add new coord to front
-                print(lineCoords)
+                # print(lineCoords)
                 # Write to drones
                 for num, cf in enumerate(swarm.allcfs.crazyflies):
                     cf.goTo(lineCoords[num].tolist(), 0, 2.5, relative=False)
@@ -201,6 +225,6 @@ if __name__ == "__main__":
             currentFormation = formation
 
     # Land
-    circleLand(swarm, timeHelper, previousCoord)
+    circleLand(swarm, timeHelper, previousCoord, reverse=reversed)
 
     # GG
