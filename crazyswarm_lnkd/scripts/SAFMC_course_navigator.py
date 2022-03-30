@@ -45,21 +45,23 @@ import rospy
 import rospkg
 from std_msgs.msg import *
 from geometry_msgs.msg import *
-from crazyswarm_lnkd.srv import *
+# from crazyswarm_lnkd.srv import *
 
 # Crazyswarm
-from crazyswarm.msg import GenericLogData
+# from crazyswarm.msg import GenericLogData
 
 
 # GLOBAL CONSTANTS
-FORMATION_RADIUS = 1.25  # m
+FORMATION_RADIUS = 1.25 # m
+TAKEOFF_HEIGHT = 1.0    # m
 
 
 def initSwarm():
     # Load the crazyflies from file and build the swarm object
     print("CF swarm starting...")
     rospack = rospkg.RosPack()
-    launchPath = rospack.get_path('crazyswarm_lnkd')+"/launch/crazyflies.yaml"
+    launchPath = rospack.get_path('crazyswarm_lnkd')+"/launch/allCrazyflies.yaml"
+    # launchPath = "../launch/allCrazyflies.yaml"
     swarm = Crazyswarm(crazyflies_yaml=launchPath)
     timeHelper = swarm.timeHelper
     timeHelper.sleep(3)
@@ -74,7 +76,7 @@ def stableTakeoff(swarm: Crazyswarm, timeHelper):
     # Performs a more stable takeoff facilitated by estimator reset
     resetEstimator(swarm, timeHelper)
 
-    swarm.allcfs.takeoff(targetHeight=1.0, duration=4)
+    swarm.allcfs.takeoff(targetHeight=TAKEOFF_HEIGHT, duration=4)
     timeHelper.sleep(4.0)
 
 
@@ -102,24 +104,31 @@ def circleArrangement(swarm: Crazyswarm, timeHelper, frontCoord, avoidance=True)
             cf.goTo([0, 0, height], 0, 2.5, relative=True)
         timeHelper.sleep(2.5)
 
-    # 2. Create drone co-ord from its formation position and the formation's front and move
-    for cf in swarm.allcfs.crazyflies:
-        formationPos = np.add(cf.initialPosition, np.array(frontCoord))
-        cf.goTo(formationPos, 0, 2.5, relative=False)
-    timeHelper.sleep(2.5)
+        # 2. Create drone co-ord from its formation position and the formation's front and move
+        for num, cf in enumerate(swarm.allcfs.crazyflies):
+            height = calcFlightLevelValue(num, 5)
+            formationPos = np.add(cf.initialPosition, np.array(frontCoord))
+            formationPos[2] += height
+            cf.goTo(formationPos, 0, 2.5, relative=False)
+        timeHelper.sleep(2.5)
 
-    if avoidance:
         # 3. Return to normal height
         for num, cf in enumerate(swarm.allcfs.crazyflies):
             height = calcFlightLevelValue(num, 5)
             cf.goTo([0, 0, -height], 0, 2.5, relative=True)
         timeHelper.sleep(2.5)
 
+    else:
+        for cf in swarm.allcfs.crazyflies:
+            formationPos = np.add(cf.initialPosition, np.array(frontCoord))
+            cf.goTo(formationPos, 0, 2.5, relative=False)
+        timeHelper.sleep(2.5)
+
 
 def calcFlightLevelValue(droneNum, numLevels):
     # Returns absolute height for drone flight level
     # This might break for number of flight levels different from 5 idfk
-    height = (0.25*(numLevels % droneNum)) - 0.5
+    height = (0.25*(droneNum % numLevels)) - 0.5
     return height
 
 
@@ -139,13 +148,15 @@ if __name__ == "__main__":
     # Multi-ranger code has been removed for now, potential to re-add in future
     # MR_checker = rospy.ServiceProxy("MR_checker", MRProximityAlert, persistent=True)
 
-    previousCoord = [0, 0, 0]   # For circle moves
+    previousCoord = [0, 0, TAKEOFF_HEIGHT]   # For circle moves
     currentFormation = 0        # 0 = circle, 1 = line
     lineCoords = [[0, 0, 0]]*len(swarm.allcfs.crazyflies)
 
     # Main program loop
     with open('testCSV.csv', newline='') as csvfile:
+    # with open('waypoints.csv', newline='') as csvfile:
         # Load CSV coordinates into iterable object
+        # csv_Reader = csv.DictReader(csvfile, delimiter=',', quotechar='|')
         csv_Reader = csv.DictReader(csvfile, delimiter=' ', quotechar='|')
 
         # Takeoff
@@ -154,41 +165,40 @@ if __name__ == "__main__":
 
         # 3. Iterate over coordate array and move the swarm
         for row in csv_Reader:
-            currentCoord = np.array([row['x'], row['y'], row['z']])
-            formation = row['Formation']
+            currentCoord = np.array([row['x'], row['y'], row['z']]).astype(np.float32)
+            formation = int(row['Formation'])
 
-            # 3A - Formation update (FUNCTIONALLY COMPLETE)
-            if formation != currentFormation:
-                if formation == 0:
-                    circleArrangement(swarm, timeHelper, currentCoord)
-                else:
-                    # I promise this makes sense :)
-                    lineCoords = getCircleCoords(swarm, currentCoord)
-
-                currentFormation = row['Formation']
-
-            # 3B - Circle (FUNCTIONALLY COMPLETE)
-            if currentFormation == 0:
-                if row['ID'] != 1:
-                    relativeMove = np.subtract(currentCoord, previousCoord)
-                    swarm.allcfs.goTo(relativeMove, 0, 2.5, relative=True)
+            # 3A - Circle (FUNCTIONALLY COMPLETE)
+            if formation == 0:
+                if formation != currentFormation:
+                    # Handle formation update from 1 to 0
+                    print("1 to 0")
+                    circleArrangement(swarm, timeHelper, currentCoord) 
+                elif int(row['ID']) != 1:
+                    relativeMove = np.subtract(currentCoord, previousCoord).tolist()
+                    # swarm.allcfs.goTo(relativeMove, 0, 2.5, relative=True)
+                    swarm.allcfs.goTo(relativeMove, 0, 2.5)
                     timeHelper.sleep(2.5)
-
                 else:
                     circleArrangement(swarm, timeHelper, currentCoord, False)
 
-            # 3C - Line
+            # 3B - Line
             else:
+                if formation != currentFormation:
+                    # Handle formation update from 0 to 1
+                    lineCoords = getCircleCoords(swarm, previousCoord)
+                print("3C")
                 lineCoords.pop(len(lineCoords)-1)  # Remove final element
                 lineCoords.insert(0, currentCoord)  # Add new coord to front
-
+                print(lineCoords)
                 # Write to drones
                 for num, cf in enumerate(swarm.allcfs.crazyflies):
-                    cf.goTo(lineCoords[num], 0, 2.5, relative=False)
+                    cf.goTo(lineCoords[num].tolist(), 0, 2.5, relative=False)
                 timeHelper.sleep(2.5)
 
             # Store the previous coord as DictReader object can't be indexed
             previousCoord = currentCoord
+            currentFormation = formation
 
     # Land
     circleLand(swarm, timeHelper, previousCoord)
