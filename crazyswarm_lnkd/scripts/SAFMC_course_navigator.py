@@ -59,16 +59,19 @@ TAKEOFF_HEIGHT = 1.0    # m
 def initSwarm():
     # Load the crazyflies from file and build the swarm object
     print("CF swarm starting...")
-    rospack = rospkg.RosPack()
-    launchPath = rospack.get_path(
-        'crazyswarm_lnkd')+"/launch/allCrazyflies.yaml"
+    # rospack = rospkg.RosPack()
+    # launchPath = rospack.get_path(
+    #     'crazyswarm_lnkd')+"/launch/allCrazyflies.yaml"
+    # print(launchPath)
     # launchPath = "../launch/allCrazyflies.yaml"
-    swarm = Crazyswarm(crazyflies_yaml=launchPath)
+    # swarm = Crazyswarm(crazyflies_yaml=launchPath)
+    swarm = Crazyswarm()
     timeHelper = swarm.timeHelper
     timeHelper.sleep(3)
 
     # Reset the estimator to reduce RVIZ jank
     resetEstimator(swarm, timeHelper)
+    print("finish init")
 
     return swarm, timeHelper
 
@@ -79,6 +82,8 @@ def stableTakeoff(swarm: Crazyswarm, timeHelper):
 
     swarm.allcfs.takeoff(targetHeight=TAKEOFF_HEIGHT, duration=4)
     timeHelper.sleep(4.0)
+
+    swarm.allcfs.setParam('motion/disable', 1)
 
 
 def circleLand(swarm: Crazyswarm, timeHelper, landCoord, reverse=False):
@@ -94,7 +99,7 @@ def resetEstimator(swarm: Crazyswarm, timeHelper):
     timeHelper.sleep(1.0)
 
 
-def circleArrangement(swarm: Crazyswarm, timeHelper, frontCoord, avoidance=True, reverse=False):
+def circleArrangement(swarm: Crazyswarm, timeHelper, frontCoord, avoidance=False, reverse=False):
     # Takes front co-ordinates and arranges drones into circle formation
     # Assumes initial positions consider (0,0) to be front drone
 
@@ -104,7 +109,8 @@ def circleArrangement(swarm: Crazyswarm, timeHelper, frontCoord, avoidance=True,
     # else:
     #     formationPos = np.add(cf.initialPosition, np.array(frontCoord))
 
-    if avoidance:
+    # [DEPRECATED!] if avoidance:
+    if False:
         # 1. Split drones into 5 different movement planes
         for num, cf in enumerate(swarm.allcfs.crazyflies):
             height = calcFlightLevelValue(num, 5)
@@ -128,6 +134,7 @@ def circleArrangement(swarm: Crazyswarm, timeHelper, frontCoord, avoidance=True,
     else:
         for num, cf in enumerate(swarm.allcfs.crazyflies):
             formationPos = formationPoses[num]
+            # print("cA", formationPos)
             cf.goTo(formationPos, 0, 2.5, relative=False)
         timeHelper.sleep(2.5)
 
@@ -143,6 +150,7 @@ def getCircleCoords(swarm: Crazyswarm, circlePosition, reverse=False):
     lineCoords = [[0, 0, 0]]*len(swarm.allcfs.crazyflies)
 
     for num, cf in enumerate(swarm.allcfs.crazyflies):
+        # print("init", cf.initialPosition)
         lineCoords[num] = np.add(cf.initialPosition, np.array(circlePosition))
 
     if reverse:
@@ -166,7 +174,7 @@ if __name__ == "__main__":
 
     # Main program loop
     # with open('testCSV.csv', newline='') as csvfile:
-    with open('waypoints.csv', newline='') as csvfile:
+    with open('waypoints_husky_single_2.csv', newline='') as csvfile:
         # Load CSV coordinates into iterable object
         csv_Reader = csv.DictReader(csvfile, delimiter=',', quotechar='|')
         # csv_Reader = csv.DictReader(csvfile, delimiter=' ', quotechar='|')
@@ -181,13 +189,14 @@ if __name__ == "__main__":
                 [row['x'], row['y'], row['z']]).astype(np.float32)
             formation = int(row['Formation'])
 
-            if int(row['Wall']) > prevWall: # Approaching wall
-                swarm.allcfs.setParam("tof/tolerance", 0.3) # set height for ignoring z-ranger  
-                swarm.allcfs.setParam("tof/highpass", 1) # start ignoring z-ranger when height measured drops below tolerance
-                prevWall = 1
-            elif int(row['Wall']) < prevWall: # Leaving wall
-                swarm.allcfs.setParam('tof/highpass', 0) # stop ignoring for landing
-                prevWall = 0
+            # [DEPRECATED!] ignore z-ranger when approaching wall
+            # if int(row['Wall']) > prevWall: # Approaching wall
+            #     swarm.allcfs.setParam("tof/tolerance", 0.3) # set height for ignoring z-ranger  
+            #     swarm.allcfs.setParam("tof/highpass", 1) # start ignoring z-ranger when height measured drops below tolerance
+            #     prevWall = 1
+            # elif int(row['Wall']) < prevWall: # Leaving wall
+            #     swarm.allcfs.setParam('tof/highpass', 0) # stop ignoring for landing
+            #     prevWall = 0
 
             # 3A - Circle (FUNCTIONALLY COMPLETE)
             if formation == 0:
@@ -198,6 +207,7 @@ if __name__ == "__main__":
                     print("1 to 0")
                     # circleArrangement(swarm, timeHelper, currentCoord)
                     circleCoords = getCircleCoords(swarm, currentCoord, reversed)
+                    # print("circle", circleCoords)
                     for coord in circleCoords:
                         lineCoords.pop(len(lineCoords)-1)  # Remove final element
                         lineCoords.insert(0, coord)  # Add new coord to front
@@ -210,9 +220,11 @@ if __name__ == "__main__":
                     relativeMove = np.subtract(
                         currentCoord, previousCoord).tolist()
                     # swarm.allcfs.goTo(relativeMove, 0, 2.5, relative=True)
+                    # print("rel", relativeMove)
                     swarm.allcfs.goTo(relativeMove, 0, 2.5)
                     timeHelper.sleep(2.5)
                 else:
+                    # print("curr", currentCoord)
                     circleArrangement(swarm, timeHelper, currentCoord, False, reverse=reversed)
 
             # 3B - Line
@@ -220,6 +232,7 @@ if __name__ == "__main__":
                 if formation != currentFormation:
                     # Handle formation update from 0 to 1
                     lineCoords = getCircleCoords(swarm, previousCoord, reversed)
+                    # print("coord", lineCoords)
                 # print("3B")
                 lineCoords.pop(len(lineCoords)-1)  # Remove final element
                 lineCoords.insert(0, currentCoord)  # Add new coord to front
